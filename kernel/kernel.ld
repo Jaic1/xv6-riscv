@@ -15,7 +15,7 @@ SECTIONS
     *(trampsec)
   }
 
-  . = ALIGN(0x1000);
+  . = ALIGN(0x200000);
   PROVIDE(etext = .);
 
   /*

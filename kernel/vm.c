@@ -12,6 +12,7 @@
 pagetable_t kernel_pagetable;
 
 extern char etext[];  // kernel.ld sets this to end of kernel code.
+extern char end[];    // kernel.ld sets this to end of kernel data.
 
 extern char trampoline[]; // trampoline.S
 
@@ -39,10 +40,13 @@ kvminit()
   kvmmap(PLIC, PLIC, 0x400000, PTE_R | PTE_W);
 
   // map kernel text executable and read-only.
-  kvmmap(KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+  // using super page
+  kvmsmap(KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
 
   // map kernel data and the physical RAM we'll make use of.
-  kvmmap((uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+  // kernel data using super page
+  kvmsmap((uint64)etext, (uint64)etext, (uint64)end-(uint64)etext, PTE_R | PTE_W);
+  kvmmap(SPGROUNDUP((uint64)end), SPGROUNDUP((uint64)end), PHYSTOP-SPGROUNDUP((uint64)end), PTE_R | PTE_W);
 
   // map the trampoline for trap entry/exit to
   // the highest virtual address in the kernel.
@@ -445,4 +449,77 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+// below are functinos for super page
+
+// Return the address of the PTE in page table pagetable
+// that corresponds to virtual address va.  If alloc!=0,
+// create any required page-table pages.
+//
+// The risc-v Sv39 scheme has three levels of page-table
+// pages. A page-table page contains 512 64-bit PTEs.
+// A 64-bit virtual address is split into five fields:
+//   39..63 -- must be zero.
+//   30..38 -- 9 bits of level-2 index.
+//   21..39 -- 9 bits of level-1 index.
+//   12..20 -- 9 bits of level-0 index.
+//    0..12 -- 12 bits of byte offset within the page.
+// using super page
+static pte_t *
+swalk(pagetable_t pagetable, uint64 va, int alloc)
+{
+  if(va >= MAXVA)
+    panic("walk");
+
+  for(int level = 2; level > 1; level--) {
+    pte_t *pte = &pagetable[PX(level, va)];
+    if(*pte & PTE_V) {
+      pagetable = (pagetable_t)PTE2PA(*pte);
+    } else {
+      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
+        return 0;
+      memset(pagetable, 0, PGSIZE);
+      *pte = PA2PTE(pagetable) | PTE_V;
+    }
+  }
+  return &pagetable[PX(1, va)];
+}
+
+// add a mapping to the kernel page table.
+// only used when booting.
+// does not flush TLB or enable paging.
+// using super page
+void
+kvmsmap(uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  if(mapspages(kernel_pagetable, va, sz, pa, perm) != 0)
+    panic("kvmmap");
+}
+
+// Create PTEs for virtual addresses starting at va that refer to
+// physical addresses starting at pa. va and size might not
+// be page-aligned. Returns 0 on success, -1 if walk() couldn't
+// allocate a needed page-table page.
+// using super page
+int
+mapspages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
+{
+  uint64 a, last;
+  pte_t *pte;
+
+  a = SPGROUNDDOWN(va);
+  last = SPGROUNDDOWN(va + size - 1);
+  for(;;){
+    if((pte = swalk(pagetable, a, 1)) == 0)
+      return -1;
+    if(*pte & PTE_V)
+      panic("remap");
+    *pte = PA2PTE(pa) | perm | PTE_V;
+    if(a == last)
+      break;
+    a += SPGSIZE;
+    pa += SPGSIZE;
+  }
+  return 0;
 }

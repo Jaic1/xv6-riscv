@@ -27,7 +27,7 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  freerange((void *)SPGROUNDUP((uint64)end), (void*)PHYSTOP);
 }
 
 void

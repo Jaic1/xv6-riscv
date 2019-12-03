@@ -327,6 +327,11 @@ sfence_vma()
 #define PGROUNDUP(sz)  (((sz)+PGSIZE-1) & ~(PGSIZE-1))
 #define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1))
 
+#define SPGSIZE (4096*512)
+#define SPGROUNDUP(sz) (((sz)+SPGSIZE-1) & ~(SPGSIZE-1))
+#define SPGROUNDDOWN(a) (((a)) & ~(SPGSIZE-1))
+
+
 #define PTE_V (1L << 0) // valid
 #define PTE_R (1L << 1)
 #define PTE_W (1L << 2)
