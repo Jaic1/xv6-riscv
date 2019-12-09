@@ -132,8 +132,8 @@ UPROGS=\
 	$U/_sbrk\
 	$U/_nullptr\
 
-fs.img: mkfs/mkfs README $(UPROGS)
-	mkfs/mkfs fs.img README $(UPROGS)
+fs.img: mkfs/mkfs README $(UPROGS) user/interpret
+	mkfs/mkfs fs.img README $(UPROGS) user/interpret
 
 -include kernel/*.d user/*.d
 
