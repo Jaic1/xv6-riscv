@@ -6,6 +6,7 @@ struct pipe;
 struct proc;
 struct spinlock;
 struct sleeplock;
+struct semaphore;
 struct stat;
 struct superblock;
 
@@ -106,6 +107,12 @@ void            procdump(void);
 
 // swtch.S
 void            swtch(struct context*, struct context*);
+
+// semaphore.c
+void            sem_init(struct semaphore *, char *, int);
+void            sem_wait(struct semaphore *);
+void            sem_post(struct semaphore *);
+int             sem_holding(struct semaphore *);
 
 // spinlock.c
 void            acquire(struct spinlock*);

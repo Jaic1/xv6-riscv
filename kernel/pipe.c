@@ -6,6 +6,7 @@
 #include "proc.h"
 #include "fs.h"
 #include "sleeplock.h"
+#include "semaphore.h"
 #include "file.h"
 
 #define PIPESIZE 512
@@ -13,8 +14,10 @@
 struct pipe {
   struct spinlock lock;
   char data[PIPESIZE];
-  uint nread;     // number of bytes read
-  uint nwrite;    // number of bytes written
+  struct semaphore sem_full;    // number of bytes available
+  struct semaphore sem_empty;   // number of empty positions available
+  int nread;      // read position
+  int nwrite;     // write position
   int readopen;   // read fd is still open
   int writeopen;  // write fd is still open
 };
@@ -35,6 +38,8 @@ pipealloc(struct file **f0, struct file **f1)
   pi->nwrite = 0;
   pi->nread = 0;
   initlock(&pi->lock, "pipe");
+  sem_init(&pi->sem_full, "pipe full", 0);
+  sem_init(&pi->sem_empty, "pipe empty", PIPESIZE);
   (*f0)->type = FD_PIPE;
   (*f0)->readable = 1;
   (*f0)->writable = 0;
@@ -61,10 +66,8 @@ pipeclose(struct pipe *pi, int writable)
   acquire(&pi->lock);
   if(writable){
     pi->writeopen = 0;
-    wakeup(&pi->nread);
   } else {
     pi->readopen = 0;
-    wakeup(&pi->nwrite);
   }
   if(pi->readopen == 0 && pi->writeopen == 0){
     release(&pi->lock);
@@ -80,23 +83,23 @@ pipewrite(struct pipe *pi, uint64 addr, int n)
   char ch;
   struct proc *pr = myproc();
 
-  acquire(&pi->lock);
   for(i = 0; i < n; i++){
-    while(pi->nwrite == pi->nread + PIPESIZE){  //DOC: pipewrite-full
-      if(pi->readopen == 0 || myproc()->killed){
-        release(&pi->lock);
-        return -1;
-      }
-      wakeup(&pi->nread);
-      sleep(&pi->nwrite, &pi->lock);
+    sem_wait(&pi->sem_empty);
+    acquire(&pi->lock);
+    if(pi->readopen == 0 || myproc()->killed){
+      release(&pi->lock);
+      return -1;
     }
-    if(copyin(pr->pagetable, &ch, addr + i, 1) == -1)
+    if(copyin(pr->pagetable, &ch, addr + i, 1) == -1){
+      release(&pi->lock);
       break;
+    }
     pi->data[pi->nwrite++ % PIPESIZE] = ch;
+    release(&pi->lock);
+    sem_post(&pi->sem_full);
   }
-  wakeup(&pi->nread);
-  release(&pi->lock);
-  return n;
+
+  return i;
 }
 
 int
@@ -106,22 +109,28 @@ piperead(struct pipe *pi, uint64 addr, int n)
   struct proc *pr = myproc();
   char ch;
 
-  acquire(&pi->lock);
-  while(pi->nread == pi->nwrite && pi->writeopen){  //DOC: pipe-empty
+  for(i = 0; i < n; i++){
+    acquire(&pi->lock);
+    if(pi->nread == pi->nwrite && pi->writeopen == 0){
+      release(&pi->lock);
+      break;
+    }
+    release(&pi->lock);
+
+    sem_wait(&pi->sem_full);
+    acquire(&pi->lock);
     if(myproc()->killed){
       release(&pi->lock);
       return -1;
     }
-    sleep(&pi->nread, &pi->lock); //DOC: piperead-sleep
-  }
-  for(i = 0; i < n; i++){  //DOC: piperead-copy
-    if(pi->nread == pi->nwrite)
-      break;
     ch = pi->data[pi->nread++ % PIPESIZE];
-    if(copyout(pr->pagetable, addr + i, &ch, 1) == -1)
+    if(copyout(pr->pagetable, addr + i, &ch, 1) == -1){
+      release(&pi->lock);
       break;
+    }
+    release(&pi->lock);
+    sem_post(&pi->sem_empty);
   }
-  wakeup(&pi->nwrite);  //DOC: piperead-wakeup
-  release(&pi->lock);
+
   return i;
 }
